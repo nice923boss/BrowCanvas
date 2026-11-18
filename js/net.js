@@ -12,6 +12,10 @@
 //   on (an absent member falls back to the host). Anyone may ask for control;
 //   requests are transient flags on the host's member list, and the current
 //   controller hands over with a setControl op.
+// - Takeover: for a controller who went away, anyone may demand control. The
+//   controller gets a countdown; unless they keep control in time, control
+//   moves to the requester. Keeping control blocks further takeovers of that
+//   controller for a cooldown. The host owns the countdown.
 // - When the host leaves, members wait a random moment and try to claim the
 //   room themselves (the winner keeps its own copy of the state); the rest dial in.
 // - No signalling server reachable: solo mode, everything still works locally.
@@ -25,6 +29,8 @@ export const NET_TIMING = {
   silentMs: 11000, // no message for this long: the connection is treated as lost
   coalesceMs: 800, // ops with the same key within this window share one undo step
   historyMax: 80,
+  takeoverMs: 30000, // the controller has this long to keep control
+  takeoverCooldownMs: 600000, // after keeping control, no takeover demands for this long
 };
 
 const PALETTE = ['#e0565b', '#3a86c8', '#3aa676', '#d08a1e', '#8a5cc2', '#d4547f', '#2f9aa0', '#7c8b2a'];
@@ -117,6 +123,9 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
   const members = new Map(); // host: conn -> { id, name, color, ack, sentRev, lastSeen, wants }
   let memberList = [];
   let hostWants = 0; // host: when the host itself asked for control (0: not asking)
+  let takeover = null; // host: { id, until } a running takeover countdown
+  let cooldown = null; // host: { ctrl, until } the controller who kept control, no takeovers until then
+  let takeoverSeen = null; // client: { id, until } in the local clock
 
   const status = (text) => app.onStatus({ role, text });
   const histChanged = () => app.onHistory({ canUndo: history.canUndo, canRedo: history.canRedo });
@@ -145,8 +154,11 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
       { id: app.me.id, name: app.me.name, color: colorFor(0), host: true, wants: hostWants },
       ...[...members.values()].filter((m) => m.id).map((m) => ({ id: m.id, name: m.name, color: m.color, host: false, wants: m.wants })),
     ];
+    // a countdown ends when its requester left or already holds control
+    if (takeover && (!memberList.some((m) => m.id === takeover.id) || takeover.id === controllerId())) takeover = null;
+    const tk = takeover && { id: takeover.id, ms: Math.max(0, takeover.until - clock()) };
     app.onMembers(memberList);
-    for (const conn of members.keys()) conn.send({ t: 'members', list: memberList });
+    for (const conn of members.keys()) conn.send({ t: 'members', list: memberList, takeover: tk });
     status(memberList.length > 1 ? '已連線（主機）' : '主機（等待其他人加入）');
   }
 
@@ -164,8 +176,59 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
     app.setState(next, from === app.me.id ? 'local' : 'remote');
     broadcast({ t: 'op', op, from });
     histChanged();
-    if (op.t === 'setControl') setWants(next.control, false);
+    if (op.t === 'setControl') {
+      takeover = null; // a new controller ends any countdown aimed at the old one
+      setWants(next.control, false);
+    }
     return true;
+  }
+
+  // host only: tell one member (or the host itself) something
+  function tell(id, text) {
+    if (id === app.me.id) return notice(text);
+    for (const [conn, m] of members) if (m.id === id) conn.send({ t: 'notice', text });
+  }
+
+  const nameOf = (id) => memberList.find((m) => m.id === id)?.name ?? '成員';
+
+  // host only: start (on) or withdraw a takeover demand
+  function hostTakeover(id, on) {
+    const now = clock();
+    if (!on) {
+      if (takeover?.id !== id) return;
+      takeover = null;
+      publishMembers();
+      return;
+    }
+    const ctrl = controllerId();
+    if (id === ctrl || takeover?.id === id) return;
+    if (takeover) return tell(id, `${nameOf(takeover.id)} 正在要求接手，請稍候`);
+    if (cooldown?.ctrl === ctrl && now < cooldown.until) {
+      const min = Math.ceil((cooldown.until - now) / 60000);
+      return tell(id, `${nameOf(ctrl)} 剛選擇不移轉，約 ${min} 分鐘後才能再要求接手`);
+    }
+    const tk = { id, until: now + timing.takeoverMs };
+    takeover = tk;
+    const check = () => {
+      if (takeover !== tk) return;
+      const left = tk.until - clock();
+      if (left > 0) return timers.setTimeout(check, left);
+      takeover = null;
+      hostApply({ t: 'setControl', id }, app.me.id);
+    };
+    timers.setTimeout(check, timing.takeoverMs);
+    publishMembers();
+  }
+
+  // host only: the controller keeps control and stops takeovers for a while
+  function hostKeep(from) {
+    const ctrl = controllerId();
+    if (from !== ctrl || !takeover) return;
+    const id = takeover.id;
+    takeover = null;
+    cooldown = { ctrl, until: clock() + timing.takeoverCooldownMs };
+    tell(id, `${nameOf(ctrl)} 選擇不移轉，${Math.round(timing.takeoverCooldownMs / 60000)} 分鐘內無法再要求接手`);
+    publishMembers();
   }
 
   // host only: set or clear one member's control request
@@ -255,6 +318,12 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
         case 'deny':
           if (m.id === controllerId()) hostDeny(String(msg.id ?? ''));
           break;
+        case 'takeover':
+          hostTakeover(m.id, !!msg.on);
+          break;
+        case 'keep':
+          hostKeep(m.id);
+          break;
         case 'photo':
           if (!allowed(null, m.id)) break;
           app.onPhoto(msg.meta, msg.bytes);
@@ -310,6 +379,7 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
     role = 'host';
     server = srv;
     hostConn = null;
+    takeoverSeen = null;
     srv.onConn(attach);
     srv.onLost(() => {
       if (stopped) return;
@@ -330,6 +400,7 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
     hostConn = conn;
     seq = 0;
     lastHeard = clock();
+    takeoverSeen = null;
     history.reset();
     let welcomed = false;
     conn.onMessage((msg) => {
@@ -353,11 +424,15 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
         case 'reqDenied':
           notice('控制權申請未獲同意');
           break;
+        case 'notice':
+          notice(String(msg.text ?? ''));
+          break;
         case 'photo':
           app.onPhoto(msg.meta, msg.bytes);
           break;
         case 'members':
           memberList = msg.list;
+          takeoverSeen = msg.takeover ? { id: msg.takeover.id, until: clock() + msg.takeover.ms } : null;
           app.onMembers(msg.list);
           break;
         case 'cur':
@@ -449,6 +524,21 @@ export function createNet({ transport, room, app, timing = NET_TIMING, clock = D
     },
     get controller() {
       return controllerId();
+    },
+    // running takeover countdown: { id, until } in this tab's clock, or null
+    get takeover() {
+      if (role === 'host') return takeover && { id: takeover.id, until: takeover.until };
+      return role === 'client' ? takeoverSeen : null;
+    },
+    // demand control from an absent controller (on) or withdraw the demand (off)
+    claimControl(on = true) {
+      if (role === 'client') hostConn.send({ t: 'takeover', on: !!on });
+      else if (role === 'host') hostTakeover(app.me.id, !!on);
+    },
+    // controller only: refuse the running takeover
+    keepControl() {
+      if (role === 'client') hostConn.send({ t: 'keep' });
+      else if (role === 'host') hostKeep(app.me.id);
     },
     // ask for control (on) or withdraw the request (off)
     request(on = true) {

@@ -53,6 +53,7 @@
       <ul id="memberList" class="members"></ul>
       <label class="row">我的名稱 <input id="myName" maxlength="20"></label>
       <button id="btnRequest" hidden>申請控制畫面</button>
+      <button id="btnTakeover" hidden>要求接手（控制者沒回應時）</button>
       <button id="btnInvite">邀請連結</button>
       <button id="btnLock" hidden>只讓控制者編輯</button>
       <button id="btnRetry" hidden>重新連線</button>
@@ -115,7 +116,7 @@
     <div id="compare" class="compare" hidden></div>
     <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyText">偵測臉部中</span></div>
     <div id="faceWarn" class="banner warn" hidden>未偵測到臉部：請換一張正臉、光線均勻、眉毛沒被瀏海遮住的照片。</div>
-    <div id="lockBanner" class="banner" hidden><span id="lockText">目前由控制者操作，你只能觀看。</span> <button id="btnBannerReq" class="link">申請控制</button></div>
+    <div id="lockBanner" class="banner" hidden><span id="lockText">目前由控制者操作，你只能觀看。</span> <button id="btnBannerReq" class="link">申請控制</button> <button id="btnBannerTake" class="link">要求接手</button></div>
     <div id="teachCard" class="teach" hidden>
       <div class="teach-head"><b id="teachTitle"></b><span id="teachNum"></span></div>
       <p id="teachText"></p>
@@ -190,6 +191,20 @@
   <p>目前控制者同意後，你就能操作畫面，其他人改為觀看。</p>
   <label class="row">你的名稱 <input id="reqName" maxlength="20"></label>
   <div class="row end"><button class="btn" data-close>取消</button><button id="btnSendReq" class="btn primary">送出申請</button></div>
+</dialog>
+
+<dialog id="dlgClaim" class="dlg">
+  <h2>要求接手控制權</h2>
+  <p id="claimText">控制者離開或沒有回應時使用。</p>
+  <label class="row">你的名稱 <input id="claimName" maxlength="20"></label>
+  <div class="row end"><button class="btn" data-close>取消</button><button id="btnSendClaim" class="btn primary">送出要求</button></div>
+</dialog>
+
+<dialog id="dlgTakeover" class="dlg">
+  <h2><span id="takeWho"></span> 要求接手控制權</h2>
+  <div class="countdown"><b id="takeSecs">30</b> 秒</div>
+  <p id="takeText">倒數結束前沒有按「不移轉」，控制權會自動交給對方。</p>
+  <div class="row end"><button id="btnKeep" class="btn">不移轉</button><button id="btnGiveNow" class="btn primary">立即移交</button></div>
 </dialog>
 
 <dialog id="dlgCamera" class="dlg">

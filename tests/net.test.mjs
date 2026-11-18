@@ -73,7 +73,7 @@ function fakeTimers() {
   };
 }
 
-function peer(net, name, timers) {
+function peer(net, name, timers, clock = Date.now) {
   let state = initialState();
   const log = { status: [], members: [], photos: [], leads: [], notices: [] };
   const app = {
@@ -91,7 +91,7 @@ function peer(net, name, timers) {
     onHistory: () => {},
     onNotice: (t) => log.notices.push(t),
   };
-  const n = createNet({ transport: net.transport, room: 'r1', app, timers, random: () => 0 });
+  const n = createNet({ transport: net.transport, room: 'r1', app, timers, clock, random: () => 0 });
   return { n, app, log, get state() { return state; } };
 }
 
@@ -102,9 +102,11 @@ const settle = async () => {
 async function session(count = 2, { open = false } = {}) {
   const net = fakeNetwork();
   const timers = fakeTimers();
+  const time = { now: 1000 };
+  const clock = () => time.now;
   const peers = [];
   for (let i = 0; i < count; i++) {
-    const p = peer(net, `p${i}`, timers);
+    const p = peer(net, `p${i}`, timers, clock);
     await p.n.start();
     await settle();
     peers.push(p);
@@ -113,7 +115,7 @@ async function session(count = 2, { open = false } = {}) {
     peers[0].n.op({ t: 'setLock', lock: false });
     await settle();
   }
-  return { net, timers, peers };
+  return { net, timers, time, peers };
 }
 
 // ---------- tests ----------
@@ -272,6 +274,123 @@ test('a requester can withdraw; undo never moves control', async () => {
   assert.equal(host.state.layers.ears, false, 'undo restored the drawing');
   assert.equal(host.state.control, 'p1', 'but kept the controller');
   assert.equal(host.state.lock, true);
+});
+
+// ---------- takeover ----------
+
+const TK = 30000;
+const COOL = 600000;
+
+async function expire(timers, time, ms = TK) {
+  time.now += ms;
+  timers.runTimeouts();
+  await settle();
+}
+
+test('takeover: the countdown reaches everyone, and control moves when nobody keeps it', async () => {
+  const { peers, timers, time } = await session(3);
+  const [host, a, b] = peers;
+  a.n.claimControl();
+  await settle();
+  for (const p of peers) assert.equal(p.n.takeover?.id, 'p1', 'everyone sees the countdown');
+  assert.equal(host.n.takeover.until - time.now, TK);
+  assert.equal(b.n.takeover.until - time.now, TK, 'client deadline in its own clock');
+
+  await expire(timers, time, TK - 1);
+  assert.equal(host.n.controller, 'p0', 'not before the deadline');
+  await expire(timers, time, 1);
+  for (const p of peers) assert.equal(p.n.controller, 'p1');
+  for (const p of peers) assert.equal(p.n.takeover, null);
+  assert.equal(a.n.canEdit, true);
+  assert.equal(host.n.canEdit, false);
+});
+
+test('takeover: the controller keeps control, and no new demand for the cooldown', async () => {
+  const { peers, timers, time } = await session(3);
+  const [host, a, b] = peers;
+  a.n.claimControl();
+  await settle();
+  host.n.keepControl();
+  await settle();
+  for (const p of peers) assert.equal(p.n.takeover, null);
+  assert.match(a.log.notices.at(-1), /選擇不移轉，10 分鐘內/);
+  await expire(timers, time);
+  assert.equal(host.n.controller, 'p0', 'the old countdown does not fire');
+
+  time.now += COOL - 60000;
+  b.n.claimControl();
+  await settle();
+  assert.equal(host.n.takeover, null, 'blocked during the cooldown');
+  assert.match(b.log.notices.at(-1), /約 1 分鐘後/);
+
+  time.now += 60000;
+  b.n.claimControl();
+  await settle();
+  assert.equal(host.n.takeover?.id, 'p2', 'allowed after the cooldown');
+});
+
+test('takeover: only the controller can keep; withdraw and a second demand', async () => {
+  const { peers, timers, time } = await session(3);
+  const [host, a, b] = peers;
+  a.n.claimControl();
+  await settle();
+  b.n.keepControl();
+  await settle();
+  assert.equal(host.n.takeover?.id, 'p1', 'a non-controller cannot refuse');
+
+  b.n.claimControl();
+  await settle();
+  assert.equal(host.n.takeover.id, 'p1', 'one countdown at a time');
+  assert.match(b.log.notices.at(-1), /p1 正在要求接手/);
+
+  a.n.claimControl(false);
+  await settle();
+  assert.equal(host.n.takeover, null);
+  await expire(timers, time);
+  assert.equal(host.n.controller, 'p0', 'withdrawn demand does not move control');
+});
+
+test('takeover: a client controller keeps control; immediate handover ends the countdown', async () => {
+  const { peers, timers, time } = await session(3);
+  const [host, a, b] = peers;
+  a.n.request(true);
+  await settle();
+  host.n.answer('p1', true);
+  await settle();
+
+  host.n.claimControl();
+  await settle();
+  assert.equal(a.n.takeover?.id, 'p0', 'the host can demand control too');
+  a.n.keepControl();
+  await settle();
+  assert.equal(host.n.takeover, null);
+  assert.match(host.log.notices.at(-1), /p1 選擇不移轉/);
+
+  // the cooldown belongs to p1; once p1 hands over, p2 can demand from the new controller
+  a.n.answer('p2', true);
+  await settle();
+  assert.equal(host.n.controller, 'p2');
+  a.n.claimControl();
+  await settle();
+  assert.equal(host.n.takeover?.id, 'p1');
+  b.n.answer('p1', true);
+  await settle();
+  assert.equal(host.n.takeover, null, 'handing over at once ends the countdown');
+  assert.equal(host.n.controller, 'p1');
+  await expire(timers, time);
+  assert.equal(host.n.controller, 'p1');
+});
+
+test('takeover: the countdown stops when the requester leaves', async () => {
+  const { peers, timers, time } = await session(3);
+  const [host, a] = peers;
+  a.n.claimControl();
+  await settle();
+  a.n.stop();
+  await settle();
+  assert.equal(host.n.takeover, null);
+  await expire(timers, time);
+  assert.equal(host.n.controller, 'p0');
 });
 
 test('controller leaves: control falls back to the host', async () => {

@@ -168,6 +168,8 @@ textarea { width: 100%; resize: vertical; }
 .dlg.wide { width: min(760px, calc(100vw - 32px)); }
 .dlg::backdrop { background: rgba(30, 20, 15, .35); }
 .dlg h2 { margin: 0 0 8px; font-size: 18px; }
+.countdown { text-align: center; font-size: 15px; color: #7a4a00; margin: 6px 0; }
+.countdown b { font-size: 44px; font-variant-numeric: tabular-nums; margin-right: 4px; }
 .dlg video { width: 100%; border-radius: 10px; background: #000; transform: scaleX(-1); }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #5c524c; margin: 8px 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
