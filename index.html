@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BrowCanvas 眉型設計板</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M6 40 C18 22 40 18 58 28 C42 26 22 30 6 40Z' fill='%235a4636'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">
+{ "imports": { "peerjs": "https://cdn.jsdelivr.net/npm/peerjs@1.5.5/+esm" } }
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">BrowCanvas</span><span class="sub">眉型設計板</span></div>
+  <div class="group">
+    <button id="btnUpload" class="btn primary" title="上傳顧客照片">上傳照片</button>
+    <button id="btnCamera" class="btn" title="用相機拍照">拍照</button>
+    <button id="btnDemo" class="btn ghost" title="換回 AI 示範模特兒">示範圖</button>
+    <input id="fileInput" type="file" accept="image/*" hidden>
+    <input id="captureInput" type="file" accept="image/*" capture="user" hidden>
+  </div>
+  <div class="group">
+    <button id="btnUndo" class="btn icon" title="復原（Ctrl+Z）">↶</button>
+    <button id="btnRedo" class="btn icon" title="重做（Ctrl+Y）">↷</button>
+  </div>
+  <div class="group seg" role="tablist">
+    <button id="viewEdit" class="seg-btn on" data-view="edit">編輯</button>
+    <button id="viewCompare" class="seg-btn" data-view="compare">方案比較</button>
+  </div>
+  <div class="group">
+    <button id="btnExport" class="btn">匯出 ▾</button>
+    <div id="exportMenu" class="menu" hidden>
+      <button data-export="png-guides">圖片（含參考線）</button>
+      <button data-export="png-clean">圖片（不含參考線）</button>
+      <button data-export="compare">方案比較圖</button>
+      <hr>
+      <button data-export="project">儲存專案檔</button>
+      <button data-export="open">開啟專案檔</button>
+    </div>
+    <input id="projectInput" type="file" accept=".json,application/json" hidden>
+  </div>
+  <div class="spacer"></div>
+  <div class="group">
+    <button id="reqHint" class="chip req" title="控制權申請" hidden></button>
+    <div id="reqMenu" class="menu right" hidden>
+      <div class="menu-title">申請控制畫面</div>
+      <ul id="reqList" class="members reqs"></ul>
+    </div>
+    <button id="btnMembers" class="chip" title="線上成員"><span id="netDot" class="dot"></span><span id="netText">連線中</span><span id="memberCount" class="count">1</span></button>
+    <div id="memberMenu" class="menu right" hidden>
+      <div class="menu-title">線上成員</div>
+      <ul id="memberList" class="members"></ul>
+      <label class="row">我的名稱 <input id="myName" maxlength="20"></label>
+      <button id="btnRequest" hidden>申請控制畫面</button>
+      <button id="btnInvite">邀請連結</button>
+      <button id="btnLock" hidden>只讓控制者編輯</button>
+      <button id="btnRetry" hidden>重新連線</button>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside id="leftPanel" class="panel left">
+    <section>
+      <h3>工具</h3>
+      <div class="tools">
+        <button class="tool on" data-tool="move" title="拖曳眉頭、眉峰、眉尾與整條眉（V）">調整眉型</button>
+        <button class="tool" data-tool="smudge" title="補塗要抹除的原生眉（B）">抹除筆</button>
+        <button class="tool" data-tool="restore" title="把誤抹的皮膚還原（R）">還原筆</button>
+        <button class="tool" data-tool="pan" title="移動畫面（H，或按住空白鍵）">移動畫面</button>
+      </div>
+      <label class="slider"><span>筆刷大小 <b id="brushVal">16</b></span><input id="brushSize" type="range" min="3" max="60" value="16"></label>
+      <div class="row tight">
+        <button id="btnFit" class="btn small">符合視窗</button>
+        <button id="btnZoomBrow" class="btn small">放大到眉區</button>
+      </div>
+    </section>
+    <section>
+      <h3>去除原生眉</h3>
+      <label class="check"><input id="eraseOn" type="checkbox" checked> 顯示去眉效果</label>
+      <label class="check"><input id="eraseAuto" type="checkbox" checked> 自動偵測原眉範圍</label>
+      <label class="slider"><span>抹除範圍 <b id="eraseExpandVal"></b></span><input id="eraseExpand" type="range" min="0" max="1.2" step="0.05"></label>
+      <label class="slider"><span>毛髮靈敏度 <b id="eraseSensVal"></b></span><input id="eraseSens" type="range" min="2" max="40" step="1"></label>
+      <label class="slider"><span>膚質紋理 <b id="eraseTexVal"></b></span><input id="eraseTex" type="range" min="0" max="1.5" step="0.05"></label>
+      <div class="row tight">
+        <button id="btnUndoStroke" class="btn small">收回一筆</button>
+        <button id="btnClearStrokes" class="btn small">清除筆刷</button>
+      </div>
+    </section>
+    <section>
+      <h3>圖層</h3>
+      <label class="check"><input data-layer="photo" type="checkbox"> 照片</label>
+      <label class="slider"><span>照片透明度 <b id="photoOpVal"></b></span><input id="photoOpacity" type="range" min="0.1" max="1" step="0.05"></label>
+      <label class="check"><input data-layer="sketch" type="checkbox"> 人偶草圖（白底）</label>
+      <label class="check"><input data-layer="newBrow" type="checkbox"> 新眉型</label>
+      <label class="check"><input data-layer="handles" type="checkbox"> 調整控制點</label>
+      <div class="layer-list">
+        <label class="check"><input data-layer="oval" type="checkbox"><i style="--c:#ff7a59"></i> 臉型輪廓</label>
+        <label class="check"><input data-layer="eyes" type="checkbox"><i style="--c:#2f9cf0"></i> 眼睛</label>
+        <label class="check"><input data-layer="origBrow" type="checkbox"><i style="--c:#e0a400"></i> 原生眉</label>
+        <label class="check"><input data-layer="ears" type="checkbox"><i style="--c:#9b6ee8"></i> 耳朵（估計）</label>
+        <label class="check"><input data-layer="noseMouth" type="checkbox"><i style="--c:#21a67a"></i> 鼻子、嘴巴</label>
+        <label class="check"><input data-layer="guides" type="checkbox"><i style="--c:#ec407a"></i> 眉型定位線</label>
+        <label class="check"><input data-layer="thirds" type="checkbox"><i style="--c:#7d8590"></i> 三庭五眼</label>
+      </div>
+      <label class="row">眉峰參考 <select id="peakRule"></select></label>
+      <p class="hint">定位線為常見參考規則，實際規則以老師確認為準。</p>
+    </section>
+  </aside>
+
+  <main id="stage" class="stage">
+    <canvas id="view"></canvas>
+    <canvas id="cursors" class="cursors"></canvas>
+    <div id="compare" class="compare" hidden></div>
+    <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyText">偵測臉部中</span></div>
+    <div id="faceWarn" class="banner warn" hidden>未偵測到臉部：請換一張正臉、光線均勻、眉毛沒被瀏海遮住的照片。</div>
+    <div id="lockBanner" class="banner" hidden><span id="lockText">目前由控制者操作，你只能觀看。</span> <button id="btnBannerReq" class="link">申請控制</button></div>
+    <div id="teachCard" class="teach" hidden>
+      <div class="teach-head"><b id="teachTitle"></b><span id="teachNum"></span></div>
+      <p id="teachText"></p>
+      <div class="row tight">
+        <button id="teachPrev" class="btn small">上一步</button>
+        <button id="teachNext" class="btn small primary">下一步</button>
+        <button id="teachClose" class="btn small ghost">結束</button>
+      </div>
+    </div>
+    <div class="mobile-tabs">
+      <button data-panel="leftPanel">工具／圖層</button>
+      <button data-panel="rightPanel">眉型調整</button>
+    </div>
+  </main>
+
+  <aside id="rightPanel" class="panel right">
+    <section>
+      <h3>方案</h3>
+      <div id="planTabs" class="plan-tabs"></div>
+      <div class="row tight">
+        <input id="planName" maxlength="30" placeholder="方案名稱">
+        <button id="btnPlanDup" class="btn small" title="複製目前方案">複製</button>
+        <button id="btnPlanDel" class="btn small danger" title="刪除目前方案">刪除</button>
+      </div>
+    </section>
+    <section>
+      <h3>眉型庫</h3>
+      <div id="presets" class="presets"></div>
+    </section>
+    <section>
+      <h3>調整</h3>
+      <div class="seg full">
+        <button class="seg-btn on" data-side="L">畫面左眉<small>顧客右眉</small></button>
+        <button class="seg-btn" data-side="R">畫面右眉<small>顧客左眉</small></button>
+      </div>
+      <label class="check"><input id="linkSides" type="checkbox" checked> 左右連動（上下位置各自獨立）</label>
+      <div class="row tight">
+        <button id="btnMirror" class="btn small">鏡像到另一邊</button>
+        <button id="btnReset" class="btn small">重設到定位線</button>
+        <button id="btnHideSide" class="btn small">隱藏這邊</button>
+      </div>
+      <div id="sliders" class="sliders"></div>
+      <div class="colors-head">眉色</div>
+      <div id="colors" class="colors"></div>
+    </section>
+    <section>
+      <h3>設計理由</h3>
+      <textarea id="planNote" rows="4" placeholder="例如：臉型偏長，眉峰往外移、角度放平，視覺上縮短臉長。"></textarea>
+    </section>
+  </aside>
+</div>
+
+<footer class="footbar">
+  <button id="btnTeach" class="btn small">教學引導</button>
+  <button id="btnCustomers" class="btn small">顧客紀錄</button>
+  <button id="btnLead" class="btn small">顧客留資／預約</button>
+  <span id="toast" class="toast" hidden></span>
+  <span class="spacer"></span>
+  <span class="credit">製作者：黃政文</span>
+</footer>
+
+<dialog id="dlgInvite" class="dlg">
+  <h2>邀請其他人一起看</h2>
+  <p>開啟同一個連結的人會自動加入，看到同一個畫面。</p>
+  <div class="row"><input id="inviteLink" readonly><button id="btnCopyInvite" class="btn primary">複製</button></div>
+  <p id="inviteWarn" class="hint warn" hidden>目前是 localhost 網址，手機與其他電腦打不開。請用 start.bat 視窗顯示的區網網址開啟本頁，再複製邀請連結。</p>
+  <div class="row end"><button class="btn" data-close>關閉</button></div>
+</dialog>
+
+<dialog id="dlgRequest" class="dlg">
+  <h2>申請控制畫面</h2>
+  <p>目前控制者同意後，你就能操作畫面，其他人改為觀看。</p>
+  <label class="row">你的名稱 <input id="reqName" maxlength="20"></label>
+  <div class="row end"><button class="btn" data-close>取消</button><button id="btnSendReq" class="btn primary">送出申請</button></div>
+</dialog>
+
+<dialog id="dlgCamera" class="dlg">
+  <h2>拍照</h2>
+  <video id="camVideo" autoplay playsinline muted></video>
+  <p class="hint">請正面平視鏡頭，頭髮往後撥，讓眉毛完整露出。</p>
+  <div class="row end"><button class="btn" data-close>取消</button><button id="btnShoot" class="btn primary">拍下</button></div>
+</dialog>
+
+<dialog id="dlgLead" class="dlg">
+  <form id="leadForm" method="dialog">
+    <h2>顧客留資／預約</h2>
+    <p class="hint">資料只會送到目前控制畫面的人（通常是老師）的裝置保存，不會分享給其他參與者。</p>
+    <label class="field">姓名 <input name="name" required maxlength="30"></label>
+    <label class="field">電話 <input name="phone" type="tel" maxlength="30"></label>
+    <label class="field">LINE ID <input name="line" maxlength="40"></label>
+    <label class="field">希望預約時間 <input name="when" type="datetime-local"></label>
+    <label class="field">想做的方案 <select name="plan" id="leadPlan"></select></label>
+    <label class="field">想對老師說 <textarea name="message" rows="3" maxlength="500"></textarea></label>
+    <label class="check"><input name="consent" type="checkbox" required> 我同意控制畫面的人保存以上資料，用於聯繫與預約。</label>
+    <div class="row end"><button type="button" class="btn" data-close>取消</button><button type="submit" class="btn primary">送出</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgCustomers" class="dlg wide">
+  <h2>顧客紀錄 <small class="hint">只存在這台裝置的瀏覽器</small></h2>
+  <div class="seg">
+    <button class="seg-btn on" data-ctab="customers">顧客</button>
+    <button class="seg-btn" data-ctab="leads">留資／預約</button>
+  </div>
+  <form id="custForm" class="cust-form">
+    <input type="hidden" name="id">
+    <div class="grid2">
+      <label class="field">姓名 <input name="name" required maxlength="30"></label>
+      <label class="field">聯絡方式 <input name="contact" maxlength="60" placeholder="電話或 LINE"></label>
+    </div>
+    <div class="field">偏好
+      <div id="prefChips" class="chips"></div>
+    </div>
+    <label class="field">其他偏好說明 <input name="prefText" maxlength="200"></label>
+    <div class="grid2">
+      <label class="field">選定方案 <select name="plan" id="custPlan"></select></label>
+      <label class="field">備註 <input name="note" maxlength="300"></label>
+    </div>
+    <div class="row end">
+      <button type="button" id="custNew" class="btn">清空表單</button>
+      <button type="submit" class="btn primary">儲存（含方案截圖）</button>
+    </div>
+  </form>
+  <div id="custList" class="cust-list"></div>
+  <div class="row end">
+    <button id="custExport" class="btn">匯出 JSON</button>
+    <button class="btn" data-close>關閉</button>
+  </div>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
